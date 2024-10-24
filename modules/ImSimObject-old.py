@@ -142,10 +142,10 @@ def GalaxiesImage(canvas, band, pixel_scale, PSF,
     dx_gals = x_gals - ix_gals
     dy_gals = y_gals - iy_gals
     del x_gals, y_gals
-    
+
     # loop over galaxies
     for i_gal, gal_info in gals_info_selec.iterrows():
-        
+
         # galaxy position
         ## int position
         ix_gal = ix_gals[i_gal]
@@ -179,8 +179,7 @@ def GalaxiesImage(canvas, band, pixel_scale, PSF,
                 q_gal = float(np.where(q_gal<Q_MIN, Q_MIN, Q_MAX))
                 # print(f'...........assign {q_gal} for now!')
             re_gal *= (q_gal)**0.5 # account for the ellipticity
-            # galaxy = galsim.Sersic(n=n_gal, half_light_radius=re_gal, flux=flux_gal, trunc=TRUNC_FACTOR*re_gal, flux_untruncated=True)
-            galaxy = galsim.Sersic(n=n_gal, half_light_radius=re_gal, flux=flux_gal, trunc=0)
+            galaxy = galsim.Sersic(n=n_gal, half_light_radius=re_gal, flux=flux_gal, trunc=TRUNC_FACTOR*re_gal, flux_untruncated=True)
             # intrinsic ellipticity
             galaxy = galaxy.shear(q=q_gal, beta=PA_gal*galsim.degrees)
         else:

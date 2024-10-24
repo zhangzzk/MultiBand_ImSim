@@ -11,6 +11,9 @@ import math
 import galsim
 import logging
 import numpy as np
+import pandas as pd
+
+from astropy.io import fits
 
 logger = logging.getLogger(__name__)
 
@@ -143,9 +146,18 @@ def GalaxiesImage(canvas, band, pixel_scale, PSF,
     dy_gals = y_gals - iy_gals
     del x_gals, y_gals
     
+    # get availability of generative model morphology
+    cat_path1 = '/project/ls-gruen/users/zekang.zhang/benjamin/SimInputCatalog.fits'
+    with fits.open(cat_path1) as f:
+        genmodel_available = f[1].data['genmodel_available_flag']
+        
+    # index matcher
+    cat_path2 = '/project/ls-gruen/users/zekang.zhang/train_set3/gen_morph_compare/index_matcher.feather'
+    idx_cat = pd.read_feather(cat_path2)
+
     # loop over galaxies
     for i_gal, gal_info in gals_info_selec.iterrows():
-        
+
         # galaxy position
         ## int position
         ix_gal = ix_gals[i_gal]
@@ -162,58 +174,86 @@ def GalaxiesImage(canvas, band, pixel_scale, PSF,
         PA_gal = gal_info['position_angle']
         ## rotating position angle for shape noise cancellation
         PA_gal += gal_rotation_angle
+        
+        # ------
+        i_gen_gal = idx_cat['catalog_index'].iloc[i_gal]
+        
+        # could use realistic morphology or parametric
+        if genmodel_available[i_gen_gal]:
+            
+            # logger.warning(f'gen model {i_gal}')
+            
+            # load existing image instead of simulation
+            gal_path = f'/project/ls-gruen/users/zekang.zhang/benjamin/CompareGalaxies/sample_galaxy_{i_gen_gal}.fits'
+            with fits.open(gal_path) as f: # based on i_gal
+                gal_im = f[0].data 
+                # logger.warning(f'{flux_gal} vs {np.sum(gal_im)}')
+                gal_im /= np.sum(gal_im)
+            
+            # interpolation
+            Image = galsim.Image(gal_im, scale=pixel_scale)
+            galaxy = galsim.InterpolatedImage(Image)
+            galaxy = flux_gal * galaxy
+            logger.warning(f'gen model {i_gal}')
 
-        # +++ Simulation
-        n_gal = gal_info['sersic_n']
-        re_gal = gal_info['Re']
-        if (n_gal >= SERSIC_N_CUT[0]) and (n_gal <= SERSIC_N_CUT[1]) and (re_gal >= RE_CUT[0]) and (re_gal <= RE_CUT[1]):
-            ### sersic profile
-            # allowed sersic index range
-            if (n_gal < SERSIC_N_MIN) or (n_gal > SERSIC_N_MAX):
-                # print(f'Warning...........n_gal {n_gal} outrange of ({SERSIC_N_MIN}, {SERSIC_N_MAX})!')
-                n_gal = float(np.where(n_gal<SERSIC_N_MIN, SERSIC_N_MIN, SERSIC_N_MAX))
-                # print(f'...........assign {n_gal} for now!')
-            q_gal = gal_info['axis_ratio']
-            if  (q_gal < Q_MIN) or (q_gal > Q_MAX):
-                # print(f"Warning...........q_gal {q_gal} outrange of ({Q_MIN}, {Q_MAX})!")
-                q_gal = float(np.where(q_gal<Q_MIN, Q_MIN, Q_MAX))
-                # print(f'...........assign {q_gal} for now!')
-            re_gal *= (q_gal)**0.5 # account for the ellipticity
-            # galaxy = galsim.Sersic(n=n_gal, half_light_radius=re_gal, flux=flux_gal, trunc=TRUNC_FACTOR*re_gal, flux_untruncated=True)
-            galaxy = galsim.Sersic(n=n_gal, half_light_radius=re_gal, flux=flux_gal, trunc=0)
-            # intrinsic ellipticity
-            galaxy = galaxy.shear(q=q_gal, beta=PA_gal*galsim.degrees)
+            # add rotation here; might not needed
+            galaxy = galaxy.rotate(PA_gal*galsim.degrees)
+            
         else:
-            ### bulge + disk
-            # bulge
-            bulge_fraction = gal_info['bulge_fraction']
-            bulge_n = gal_info['bulge_n']
-            bulge_q = gal_info['bulge_axis_ratio']
-            if  (bulge_q < Q_MIN) or (bulge_q > Q_MAX):
-                bulge_q = float(np.where(bulge_q<Q_MIN, Q_MIN, Q_MAX))
-            bulge_Re = gal_info['bulge_Re'] * (bulge_q)**0.5 # account for the ellipticity
-            if (abs(bulge_n-4.)<1e-2):
-                bulge_gal = galsim.DeVaucouleurs(half_light_radius=bulge_Re, flux=1.0, trunc=TRUNC_FACTOR*bulge_Re, flux_untruncated=True)
-            else:
-                bulge_gal = galsim.Sersic(n=bulge_n, half_light_radius=bulge_Re, flux=1.0, trunc=TRUNC_FACTOR*bulge_Re, flux_untruncated=True)
-            # intrinsic ellipticity
-            bulge_gal = bulge_gal.shear(q=bulge_q, beta=PA_gal*galsim.degrees)
-
-            # disk
-            if bulge_fraction < 1:
-                disk_q = gal_info['disk_axis_ratio']
-                if  (disk_q < Q_MIN) or (disk_q > Q_MAX):
-                    disk_q = float(np.where(disk_q<Q_MIN, Q_MIN, Q_MAX))
-                disk_Re = gal_info['disk_Re'] * (disk_q)**0.5 # account for the ellipticity
-                disk_gal = galsim.Exponential(half_light_radius=disk_Re, flux=1.0)
+            
+            # logger.warning(f'sersic model {i_gal}')
+            
+            # +++ Simulation
+            n_gal = gal_info['sersic_n']
+            re_gal = gal_info['Re']
+            if (n_gal >= SERSIC_N_CUT[0]) and (n_gal <= SERSIC_N_CUT[1]) and (re_gal >= RE_CUT[0]) and (re_gal <= RE_CUT[1]):
+                ### sersic profile
+                # allowed sersic index range
+                if (n_gal < SERSIC_N_MIN) or (n_gal > SERSIC_N_MAX):
+                    # print(f'Warning...........n_gal {n_gal} outrange of ({SERSIC_N_MIN}, {SERSIC_N_MAX})!')
+                    n_gal = float(np.where(n_gal<SERSIC_N_MIN, SERSIC_N_MIN, SERSIC_N_MAX))
+                    # print(f'...........assign {n_gal} for now!')
+                q_gal = gal_info['axis_ratio']
+                if  (q_gal < Q_MIN) or (q_gal > Q_MAX):
+                    # print(f"Warning...........q_gal {q_gal} outrange of ({Q_MIN}, {Q_MAX})!")
+                    q_gal = float(np.where(q_gal<Q_MIN, Q_MIN, Q_MAX))
+                    # print(f'...........assign {q_gal} for now!')
+                re_gal *= (q_gal)**0.5 # account for the ellipticity
+                galaxy = galsim.Sersic(n=n_gal, half_light_radius=re_gal, flux=flux_gal, trunc=TRUNC_FACTOR*re_gal, flux_untruncated=True)
                 # intrinsic ellipticity
-                disk_gal = disk_gal.shear(q=disk_q, beta=PA_gal*galsim.degrees)
-
-                galaxy = flux_gal * (bulge_fraction * bulge_gal + (1 - bulge_fraction) * disk_gal)
-
+                galaxy = galaxy.shear(q=q_gal, beta=PA_gal*galsim.degrees)
             else:
-                galaxy = flux_gal * bulge_gal
+             
+                ### bulge + disk
+                # bulge
+                bulge_fraction = gal_info['bulge_fraction']
+                bulge_n = gal_info['bulge_n']
+                bulge_q = gal_info['bulge_axis_ratio']
+                if  (bulge_q < Q_MIN) or (bulge_q > Q_MAX):
+                    bulge_q = float(np.where(bulge_q<Q_MIN, Q_MIN, Q_MAX))
+                bulge_Re = gal_info['bulge_Re'] * (bulge_q)**0.5 # account for the ellipticity
+                if (abs(bulge_n-4.)<1e-2):
+                    bulge_gal = galsim.DeVaucouleurs(half_light_radius=bulge_Re, flux=1.0, trunc=TRUNC_FACTOR*bulge_Re, flux_untruncated=True)
+                else:
+                    bulge_gal = galsim.Sersic(n=bulge_n, half_light_radius=bulge_Re, flux=1.0, trunc=TRUNC_FACTOR*bulge_Re, flux_untruncated=True)
+                # intrinsic ellipticity
+                bulge_gal = bulge_gal.shear(q=bulge_q, beta=PA_gal*galsim.degrees)
 
+                # disk
+                if bulge_fraction < 1:
+                    disk_q = gal_info['disk_axis_ratio']
+                    if  (disk_q < Q_MIN) or (disk_q > Q_MAX):
+                        disk_q = float(np.where(disk_q<Q_MIN, Q_MIN, Q_MAX))
+                    disk_Re = gal_info['disk_Re'] * (disk_q)**0.5 # account for the ellipticity
+                    disk_gal = galsim.Exponential(half_light_radius=disk_Re, flux=1.0)
+                    # intrinsic ellipticity
+                    disk_gal = disk_gal.shear(q=disk_q, beta=PA_gal*galsim.degrees)
+
+                    galaxy = flux_gal * (bulge_fraction * bulge_gal + (1 - bulge_fraction) * disk_gal)
+
+                else:
+                    galaxy = flux_gal * bulge_gal
+                    
         # cosmic shear
         if g_const:
             galaxy = galaxy.shear(g1=g_cosmic[0], g2=g_cosmic[1])
